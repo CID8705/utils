@@ -6,6 +6,8 @@
 #define CF_CLIPTEXT CF_TEXT
 #endif
 
+#include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,15 +15,15 @@
 #include <windows.h>
 
 typedef struct {
-	TCHAR (*paths)[MAX_PATH + 1];
+	TCHAR (*paths)[MAX_PATH];
 	size_t capacity;
 	size_t size;
 } DATA;
 
 int search(DATA *data, LPCTSTR path, LPCTSTR ext) {
 	if (GetFileAttributes(path) & FILE_ATTRIBUTE_DIRECTORY) {
-		TCHAR dir[MAX_PATH + 1];
-		TCHAR subpath[MAX_PATH + 1];
+		TCHAR dir[MAX_PATH];
+		TCHAR subpath[MAX_PATH];
 		WIN32_FIND_DATA lp;
 		HANDLE handle;
 		_stprintf(dir, _T("%s\\*"), path);
@@ -43,13 +45,19 @@ int search(DATA *data, LPCTSTR path, LPCTSTR ext) {
 		LPCTSTR file = _tcsrchr(path, _T('.'));
 		if (ext == NULL || file != NULL && _tcscmp(file, ext) == 0) {
 			if (data->size >= data->capacity) {
-				data->paths = (TCHAR (*)[MAX_PATH + 1])realloc(data->paths, sizeof(TCHAR [MAX_PATH + 1]) * data->capacity * 2);
+				data->paths = (TCHAR (*)[MAX_PATH])realloc(data->paths, sizeof(TCHAR [MAX_PATH]) * data->capacity * 2);
 				if (data->paths == NULL) {
 					return EXIT_FAILURE;
 				}
 				data->capacity *= 2;
 			}
-			_tcscpy(data->paths[data->size++], path);
+			if (_tcslen(path) < MAX_PATH) {
+				_tcscpy(data->paths[data->size++], path);
+			}
+			else {
+				errno = ENAMETOOLONG;
+				return EXIT_FAILURE;
+			}
 		}
 	}
 	return EXIT_SUCCESS;
@@ -118,60 +126,90 @@ int cwrite(LPCTSTR buff) {
 }
 
 int _tmain(const int argc, LPCTSTR argv[]) {
-	DATA data = { (TCHAR (*)[MAX_PATH + 1])malloc(sizeof(TCHAR [MAX_PATH + 1]) * (argc - 1)), argc - 1, 0 };
+	DATA data = { (TCHAR (*)[MAX_PATH])malloc(sizeof(TCHAR [MAX_PATH]) * (argc - 1)), 0, 0 };
 	unsigned int i;
-	for (i = 1; i < argc; ++i) {
-		TCHAR path[MAX_PATH + 1];
-		LPCTSTR str = argv[i];
-		while (_tcschr(_T("\\/:*?\"<>|"), *str) != NULL) {
-			++str;
-		}
-		_tcscpy(path, str);
-		while (_tcschr(_T("\\/:*?\"<>|"), path[_tcslen(path) - 1]) != NULL) {
-			path[_tcslen(path) - 1] = _T('\0');
-		}
-		if (search(&data, path, _T(".png")) != EXIT_SUCCESS) {
-			_ftprintf(stderr, _T("Cannot allocate memory.\n"));
-		}
-	}
-	for (i = 0; i < data.size; ++i) {
-		size_t size;
-		unsigned char *binary;
-		TCHAR *base64;
-		_tprintf(_T("%s\n"), data.paths[i]);
-		FILE *fp = _tfopen(data.paths[i], _T("rb"));
-		if (fp == NULL) {
-			_ftprintf(stderr, _T("Cannot open \"%s\".\n"), data.paths[i]);
-		}
-		fseek(fp, 0, SEEK_END);
-		size = ftell(fp);
-		fseek(fp, 0, SEEK_SET);
-		binary = (unsigned char *)malloc(sizeof(unsigned char) * size);
-		fread(binary, sizeof(unsigned char), size, fp);
-		fclose(fp);
-		base64 = (TCHAR *)malloc(sizeof(TCHAR) * (size + 2) / 3 * 4 + 1);
-		if (base64 == NULL) {
-			_ftprintf(stderr, _T("Cannot allocate memory.\n"));
-		}
-		size = base64_encode(binary, size, base64);
-		free(binary);
-		// binary = (unsigned char *)malloc(sizeof(unsigned char) * _tcslen(base64) / 4 * 3 + 3);
-		// size = base64_decode(base64, _tcslen(base64), binary);
-		// fp = _tfopen(_T("a.png"), _T("wb"));
-		// if (fp == NULL) {
-		// 	_ftprintf(stderr, _T("Cannot open \"%s\".\n"), data.paths[i]);
-		// }
-		// fwrite(binary, sizeof(unsigned char), size, fp);
-		// fclose(fp);
-		// free(binary);
-		if (cwrite(base64) != EXIT_SUCCESS) {
-			_ftprintf(stderr, _T("Cannot allocate memory.\n"));
-		}
-		free(base64);
-		if (i < data.size - 1) {
-			_tsystem(_T("PAUSE"));
+	errno = 0;
+	if (data.paths != NULL) {
+		data.capacity = argc - 1;
+		for (i = 1; i < argc; ++i) {
+			LPTSTR path;
+			LPCTSTR str = argv[i];
+			while (_tcschr(_T("\\/:*?\"<>|"), *str) != NULL) {
+				++str;
+			}
+			path = (LPTSTR)malloc(sizeof(TCHAR) * (_tcslen(str) + 1));
+			if (path == NULL) {
+				break;
+			}
+			_tcscpy(path, str);
+			while (_tcschr(_T("\\/:*?\"<>|"), path[_tcslen(path) - 1]) != NULL) {
+				path[_tcslen(path) - 1] = _T('\0');
+			}
+			if (_tcslen(str) < MAX_PATH) {
+				search(&data, path, NULL);
+			}
+			else {
+				errno = ENAMETOOLONG;
+			}
+			free(path);
+			if (errno != 0) {
+				break;
+			}
 		}
 	}
-	free(data.paths);
+	if (errno == 0) {
+		for (i = 0; i < data.size; ++i) {
+			size_t size;
+			unsigned char *binary;
+			TCHAR *base64;
+			FILE *fp;
+			_tprintf(_T("[%*u/%u] %s\n"), (unsigned char)log10(data.size) + 1, i + 1, data.size, data.paths[i]);
+			fp = _tfopen(data.paths[i], _T("rb"));
+			if (fp == NULL) {
+				break;
+			}
+			fseek(fp, 0, SEEK_END);
+			size = ftell(fp);
+			fseek(fp, 0, SEEK_SET);
+			binary = (unsigned char *)malloc(sizeof(unsigned char) * size);
+			if (binary == NULL) {
+				break;
+			}
+			fread(binary, sizeof(unsigned char), size, fp);
+			fclose(fp);
+			base64 = (TCHAR *)malloc(sizeof(TCHAR) * (size + 2) / 3 * 4 + 1);
+			if (base64 == NULL) {
+				break;
+			}
+			size = base64_encode(binary, size, base64);
+			free(binary);
+			// binary = (unsigned char *)malloc(sizeof(unsigned char) * _tcslen(base64) / 4 * 3 + 3);
+			// if (binary == NULL) {
+			// 	break;
+			// }
+			// size = base64_decode(base64, _tcslen(base64), binary);
+			// fp = _tfopen(_T("a.png"), _T("wb"));
+			// if (fp == NULL) {
+			// 	break;
+			// }
+			// fwrite(binary, sizeof(unsigned char), size, fp);
+			// fclose(fp);
+			// free(binary);
+			if (cwrite(base64) != EXIT_SUCCESS) {
+				break;
+			}
+			free(base64);
+			_tprintf(_T("Done.\n"));
+			if (i < data.size - 1) {
+				_tsystem(_T("PAUSE"));
+			}
+		}
+	}
+	if (data.capacity > 0) {
+		free(data.paths);
+	}
+	if (errno != 0) {
+		_ftprintf(stderr, _T("[Errno %d] %s\n"), errno, _tcserror(errno));
+	}
 	return EXIT_SUCCESS;
 }
