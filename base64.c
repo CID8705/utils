@@ -7,6 +7,7 @@
 #endif
 
 #include <errno.h>
+#include <locale.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,6 +130,7 @@ int _tmain(const int argc, LPCTSTR argv[]) {
 	DATA data = { (TCHAR (*)[MAX_PATH])malloc(sizeof(TCHAR [MAX_PATH]) * (argc - 1)), 0, 0 };
 	unsigned int i;
 	errno = 0;
+	_tsetlocale(LC_ALL, _T(""));
 	if (data.paths != NULL) {
 		data.capacity = argc - 1;
 		for (i = 1; i < argc; ++i) {
