@@ -105,10 +105,9 @@ size_t base64_decode(LPCTSTR in, const size_t inlen, unsigned char *out) {
 }
 
 int cwrite(LPCTSTR buff) {
-	LPTSTR clip;
 	HGLOBAL mem = GlobalAlloc(GHND | GMEM_SHARE, sizeof(TCHAR) * (_tcslen(buff) + 1));
 	if (mem != NULL) {
-		clip = (LPTSTR)GlobalLock(mem);
+		LPTSTR clip = (LPTSTR)GlobalLock(mem);
 		if (clip != NULL) {
 			_tcscpy(clip, buff);
 			GlobalUnlock(mem);
