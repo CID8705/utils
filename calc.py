@@ -1,18 +1,68 @@
 import itertools
 from collections import defaultdict, deque
 
+# LSB (右端) からのビット位置を返すヘルパー関数
+def get_lsb_bit_index(N, i):
+    """MSB側インデックスiからLSB側インデックスを計算 (LSB=0)"""
+    return N - 1 - i
+
 def is_single_bit_change(state_a, state_b):
     """2つの状態が1ビットのみ異なるかチェックする (S=1遷移の条件)"""
     if len(state_a) != len(state_b): return False
-    # 異なるビットの数を数える
     diff = sum(1 for a, b in zip(state_a, state_b) if a != b)
     return diff == 1
 
+def format_transition_bit_change(state_a, state_b):
+    """
+    遷移A->Bにおける、変化したビットの位置と変化内容をLSB基準で表示する。
+    例: '0000' -> '0001' (N=4) の場合、'0ビット目が0から1へ変化'
+    """
+    if len(state_a) != len(state_b):
+        return f"状態長不一致: {state_a} -> {state_b}"
+
+    N = len(state_a)
+    
+    for i in range(N):
+        bit_index = get_lsb_bit_index(N, i)
+        bit_a = state_a[i]
+        bit_b = state_b[i]
+
+        if bit_a != bit_b:
+            return f"{bit_index}ビット目が{bit_a}から{bit_b}へ変化"
+            
+    return "変化なし"
+
+def get_bit_change_sequence(path_states):
+    """
+    状態のリスト [A, B, C, ...] から、ビット変化の連鎖 [Delta(A->B), Delta(B->C), ...] を生成する。
+    連鎖の各要素: '{LSBインデックス}:{変化元->変化後}'
+    """
+    N = len(path_states[0])
+    change_sequence = []
+    
+    for i in range(len(path_states) - 1):
+        state_a = path_states[i]
+        state_b = path_states[i+1]
+        
+        change_key = ""
+        
+        for j in range(N):
+            if state_a[j] != state_b[j]:
+                k = get_lsb_bit_index(N, j) 
+                change_key = f"{k}:{state_a[j]}->{state_b[j]}"
+                break
+        
+        if not change_key:
+            change_key = "NoChange"
+            
+        change_sequence.append(change_key)
+        
+    return "->".join(change_sequence)
+# =========================================================================
+
 def build_euler_graph_variable_s(N, S):
     """
-    Nビット系、Sステップ遷移の補助グラフを構築する。
-    ノード: S-1ステップの遷移パス
-    辺: Sステップの遷移パス
+    Nビット系、Sステップ遷移の補助グラフ（デ・ブルイジングラフ）を構築する。
     """
     if S < 1:
         raise ValueError("ステップ数 S は 1 以上である必要があります。")
@@ -20,236 +70,253 @@ def build_euler_graph_variable_s(N, S):
     all_states = [''.join(p) for p in itertools.product('01', repeat=N)]
     mutable_edges = defaultdict(deque)
     total_s_transitions = 0
-    # start_node はグラフ内の任意のノードとして初期化
     start_node = None 
 
-    # ----------------------------------------------------------------------
-    # Sステップ遷移の生成とグラフ構築
-    # ----------------------------------------------------------------------
-
+    # S-1パスの生成（ノードの定義）
+    s_minus_1_length = S if S > 1 else 1
+    start_paths = []
+    
     if S == 1:
-        # S=1 の場合、ノードは単一の状態 A です。補助グラフは Q_N そのもの。
         start_paths = [[s] for s in all_states]
-        s_minus_1_length = 1
     else:
-        # S>=2 の場合、S-1パスを再帰的に生成します。
-        s_minus_1_length = S 
-        start_paths = []
-         
-        # 単一ビット変化がS-1回連続する全てのパスを生成
+        # S > 1 の場合のノード (S-1パス) 生成
         def generate_s_minus_1_paths(current_path):
             if len(current_path) == s_minus_1_length:
                 start_paths.append(current_path)
                 return
-             
+            
             last_state = current_path[-1]
             for next_state in all_states:
-                # 1ビット変化の制約
                 if is_single_bit_change(last_state, next_state):
                     generate_s_minus_1_paths(current_path + [next_state])
 
         for s in all_states:
             generate_s_minus_1_paths([s])
 
-
+    # Sステップ遷移の生成（辺の定義）
     for path_list in start_paths:
-        # ノード (S-1パス) の文字列表現
         start_node_str = "->".join(path_list)
-         
         if start_node is None:
             start_node = start_node_str
 
         last_state = path_list[-1]
-         
-        # 最後の状態から1ステップ進んでSステップ遷移（辺）を完成させる
+        
         for next_state in all_states:
             if is_single_bit_change(last_state, next_state):
-                 
-                # Sステップ遷移 (辺) の文字列
-                transition_str = start_node_str + "->" + next_state
-                 
-                # 次のノード (S-1パス) の文字列 (先頭を外し末尾を追加)
+                
+                transition_states = path_list + [next_state] # A->B->...->X の状態リスト
+                transition_str = "->".join(transition_states)
+                
                 if S == 1:
-                    # S=1の時、次のノードは単一状態 (next_state)
                     end_node_str = next_state
                 else:
-                    # S>=2の時、次のノードは (B->C->...->X)
                     end_node = path_list[1:] + [next_state]
                     end_node_str = "->".join(end_node)
-                 
-                # 補助グラフに辺を追加
+                
+                # 補助グラフに辺を追加 (始点ノード, (終点ノード, 遷移文字列))
                 mutable_edges[start_node_str].append((end_node_str, transition_str))
                 total_s_transitions += 1
-                 
+                
     if start_node is None and total_s_transitions > 0:
-        # ノードが作成されたが、start_nodeがNoneのままの場合
         start_node = next(iter(mutable_edges.keys()))
 
     return mutable_edges, total_s_transitions, start_node
 
+# =========================================================================
+# 階層的ディクショナリを用いたオイラー閉路探索（ヒエホルツァーのアルゴリズム）
+# =========================================================================
+def find_euler_circuit(graph, start_node):
+    """
+    Hierholzerのアルゴリズムを使用してオイラー閉路を探索する。
+    graphは defaultdict(deque) 形式: {始点: deque([(終点, 辺のデータ), ...]), ...}
+    """
+    current_path = [start_node]
+    circuit = []
+    
+    while current_path:
+        u = current_path[-1]
+        
+        if graph[u]:
+            v, edge_data = graph[u].popleft()
+            current_path.append(v)
+            circuit.append((u, v, edge_data))
+        else:
+            circuit_segment = []
+            while current_path and not graph[current_path[-1]]:
+                w = current_path.pop()
+                if circuit:
+                    last_edge = circuit.pop()
+                    circuit_segment.append(last_edge)
+                
+            # 閉路の再挿入 (逆順にpopしたため)
+            circuit.extend(circuit_segment[::-1])
+            
+            if not current_path and circuit:
+                # 最後の閉路セグメントの始点ノードを circuit に追加 (オイラー閉路の終点と始点を一致させる)
+                circuit.append((circuit[0][0], circuit[0][1], circuit[0][2])) # 最後の辺の始点と終点が一致
+                
+    # 閉路は (u, v, edge_data) のリスト。最後の (u, v) は最初と重複しているため削除
+    if circuit and circuit[-1][0] == circuit[0][0]:
+        circuit.pop() 
+        
+    return circuit
+
 def find_single_euler_circuit_variable_s(N, S, start_state_str='0' * 4):
     """
-    Nビット系、Sステップの全パターンをオイラー閉路探索の原理で強制的に
-    連続シーケンスに分割し、残りのパターンを0にする。
-
-    :param start_state_str: 最初のSステップ遷移の始点となる状態 (例: '0000')
+    ビット変化パターンで重複を排除し、オイラー閉路を構成する代表辺を選択し、閉路を出力する。
     """
     if S <= 0:
         raise ValueError("Sは1以上の整数である必要があります。")
 
-    mutable_edges, total_count, _ = build_euler_graph_variable_s(N, S)
+    # 1. 完全グラフの構築
+    mutable_edges_full, total_count_full, start_node_initial = build_euler_graph_variable_s(N, S)
 
-    if total_count == 0:
+    if total_count_full == 0:
         return 0, 0, 0, 0
-     
-    # ----------------------------------------------------------------------
-    # 1. 探索の最初の始点を特定
-    # ----------------------------------------------------------------------
-     
-    # ユーザーが指定した状態 (start_state_str) を先頭に持つ S-1 パス (ノード) を探す。
-    target_start_node = None
-     
-    # ノード (S-1 パス) は 'A->B->C' の形式
-    for node_str in mutable_edges.keys():
-        path_states = node_str.split('->')
-        # Sに関わらず、辺の始点状態はノードの先頭状態 (path_states[0])
-        if path_states[0] == start_state_str: # <--- 修正箇所 (path_states[0]を使用)
-            target_start_node = node_str
-            break
+    
+    # 2. ビット変化パターンによる辺のグループ化と代表辺の選択
+    # Key: ビット変化シーケンス, Value: 採用した状態遷移の接続情報 (始点ノード, 終点ノード, 遷移文字列)
+    unique_bit_change_patterns = {} 
+    
+    # Key: 始点ノード (S-1パス), Value: deque([(終点ノード, 遷移文字列), ...])
+    euler_edges_for_unique_patterns = defaultdict(deque)
+    
+    unique_patterns_count = 0
+    total_edges_adopted = 0
 
-    if target_start_node is None:
-        # 該当するノードが存在しない場合 (N, S の設定ミス等) は、
-        # 既存の任意のノードを始点にするか、エラーとする
-        # ここでは、既存の任意のノードを始点とします。
-        start_node = next(iter(mutable_edges.keys()))
-        print(f"⚠️ 指定された開始状態 ({start_state_str}) を先頭とするノードが見つからなかったため、任意のノード ({start_node}) から開始します。")
-    else:
-        start_node = target_start_node
-     
-    # ----------------------------------------------------------------------
-    # 2. グラフの性質判定
-    # ----------------------------------------------------------------------
-     
-    is_euler_circuit_guaranteed = (S >= 2) or (S == 1 and N % 2 == 0)
-     
-    # ----------------------------------------------------------------------
-    # 3. オイラー路探索 (Hierholzer's Algorithmの応用)
-    # ----------------------------------------------------------------------
-     
-    final_sequences = []
-
-    # 最初の探索は指定されたノードから開始
-    current_start_node = start_node
-     
-    while True:
-        # 未処理の辺を持つ任意のノードを始点として選択 (最初の1回のみ指定されたノードを使う)
-        if not current_start_node:
-            current_start_node = next(iter(k for k, v in mutable_edges.items() if v), None)
-
-        if current_start_node is None:
-            break
-
-        current_circuit_s = [] # Sステップ遷移のパス
-        stack = [current_start_node]
-         
-        while stack:
-            current_node = stack[-1] 
-             
-            # 現在のノードから出る辺があるかチェック
-            if mutable_edges.get(current_node):
-                # 次の辺（Sステップ遷移）を取り出す
-                next_node, transition_str = mutable_edges[current_node].pop()
-                 
-                stack.append(next_node)
-                current_circuit_s.append(transition_str)
-            else:
-                # 閉路または終点に到達
-                stack.pop()
-         
-        if current_circuit_s:
-            final_sequences.append(current_circuit_s[::-1])
-
-        # 最初の探索が終了したら、次は任意のノードから開始
-        current_start_node = None
-     
-    # ----------------------------------------------------------------------
-    # 4. 結果の整形と出力
-    # ----------------------------------------------------------------------
-     
-    overall_continuous_count = sum(len(seq) for seq in final_sequences)
-    remaining_count = total_count - overall_continuous_count
-     
-    print(f"--- N={N}ビット、S={S}ステップ、全パターン強制接続 ---")
-    print(f"全パターン数 ({S}ステップ遷移の総数): **{total_count}**")
-    print(f"💡 開始状態: **{start_state_str}**")
-
-    print(f"\n## 👑 遷移シーケンス ({len(final_sequences)}個のシーケンス)")
-     
-    if is_euler_circuit_guaranteed:
-        print("✅ **オイラー閉路が存在する（入次数=出次数）。理論上1つのシーケンスでカバーされます。**")
-    elif S == 1 and N % 2 != 0:
-        print(f"⚠️ **S=1かつN={N}（奇数）の場合、補助グラフ（$Q_N$）はオイラー閉路を持ちません。**")
-        print("   全遷移をカバーするために複数のパスに分解されています。")
-     
-    # シーケンスの出力を簡略化（最初の1つのみパスを表示）
-    for idx, seq in enumerate(final_sequences[:min(3, len(final_sequences))]):
-         
-        # シーケンスの状態遷移パスを作成
-        if not seq: continue
-         
-        # -----------------------------------------------------------
-        # 【修正】 全てのSで、単一閉路の場合に指定開始状態から始まるようシーケンスを回転
-        # -----------------------------------------------------------
-        # 単一閉路で回収された場合のみ回転させる
-        if len(final_sequences) == 1:
-            start_transition_index = -1
+    # 既存の全遷移 (mutable_edges_full) を巡回
+    for start_node_str, edges_deque in mutable_edges_full.items():
+        # 破壊しないようリストに変換してループ
+        for end_node_str, transition_str in list(edges_deque): 
             
-            # Sステップ遷移の最初の状態 (A->B->...->X の A) が start_state_str と一致するものを探す
-            for i, transition in enumerate(seq):
-                if transition.split('->')[0] == start_state_str:
-                    start_transition_index = i
-                    break
+            transition_states = transition_str.split('->')
+            bit_change_key = get_bit_change_sequence(transition_states)
+            
+            if bit_change_key not in unique_bit_change_patterns:
+                # 初めて見つかったビット変化パターンを記録し、
+                # その辺を「オイラー閉路用グラフ」の辺として採用する。
+                
+                # 採用した辺を新しいグラフに追加
+                euler_edges_for_unique_patterns[start_node_str].append((end_node_str, transition_str))
+                
+                # パターンの情報（ここでは、採用した辺の情報を保持）
+                unique_bit_change_patterns[bit_change_key] = (start_node_str, end_node_str, transition_str)
+                unique_patterns_count += 1
+                total_edges_adopted += 1
+            # else:
+            # 既に同じビット変化パターンの辺が採用されているため、この辺は破棄される。
 
-            if start_transition_index != -1:
-                # 見つかった場合はシーケンスを回転
-                seq = seq[start_transition_index:] + seq[:start_transition_index]
-        # -----------------------------------------------------------
+    # 3. 採用された辺のみを持つグラフでオイラー閉路を探索
+    
+    # 探索の開始ノードの決定
+    start_node_final = start_node_initial
+    if not euler_edges_for_unique_patterns:
+        print("オイラー閉路を構成するための辺がありません。")
+        return total_count_full, 0, 0, 0
         
-        # 最初のSステップ遷移のパスを取得 (A->B->C...->X)
-        path_parts = seq[0].split('->')
-        final_path = path_parts[:-1] # 最初のS-1ステップまで
+    if start_node_final not in euler_edges_for_unique_patterns and start_node_final in mutable_edges_full:
+        # 開始ノードが採用した辺の始点ではない場合、採用された辺を持つ任意のノードから開始
+        start_node_final = next(iter(euler_edges_for_unique_patterns.keys()))
 
-        # 全てのSステップ遷移の終端状態を追加
-        for transition in seq:
-            final_path.append(transition.split('->')[-1])
-         
-        path_str = " -> ".join(final_path)
+    print(f"--- N={N}ビット、S={S}ステップ、オイラー閉路構成による重複排除 ---")
+    print(f"全Sステップ遷移の総数: **{total_count_full}**")
+    print(f"ユニークなビット変化パターン数（採用された辺の数）: **{unique_patterns_count}**")
+    
+    # オイラー閉路の探索実行
+    euler_circuit = find_euler_circuit(euler_edges_for_unique_patterns, start_node_final)
+    
+    # 4. 結果の整形と出力
+    
+    print(f"\n## 👑 採用されたビット変化パターンに基づくシーケンス")
+    
+    final_sequences_list = []
+    
+    if euler_circuit:
+        print(f"**✅ オイラー閉路（デ・ブルイジン列）が発見されました。**")
+        print(f"閉路の長さ: **{len(euler_circuit)}** (採用されたユニークパターン数と一致)")
+        
+        # 閉路を構成する辺のデータ (遷移文字列) のリストを生成
+        sequence_transitions = [edge_data for u, v, edge_data in euler_circuit]
+        
+        # 修正: リストをそのまま追加するのではなく、要素を拡張して追加する
+        final_sequences_list.extend(sequence_transitions) 
+        total_continuous_count = len(final_sequences_list)
+        
+    else:
+        print(f"**❌ オイラー閉路は発見されませんでした。**")
+        print("（ビット変化パターンで重複排除した結果、グラフの接続性が失われたため）")
+        print(f"代わりに、採用されたユニークな辺（{total_edges_adopted}個）をリストとして出力します。")
+        
+        # 閉路が見つからなかった場合、採用された辺を全て出力する
+        for bit_change_key in unique_bit_change_patterns:
+            start_node_str, end_node_str, transition_str = unique_bit_change_patterns[bit_change_key]
+            final_sequences_list.append(transition_str)
+            
+        total_continuous_count = len(final_sequences_list)
+        
+    print(f"\n💡 開始ノード: **{start_node_final}** (S-1パス)")
+    
+    # =========================================================================
+    # 【追加】ひとつなぎのシーケンス文字列の表示
+    # =========================================================================
+    if final_sequences_list:
+        # 最初のSステップ遷移を取得 (例: '0000->0001->0011')
+        first_transition_states = final_sequences_list[0].split('->')
+        
+        # 連結シーケンスの初期状態として、最初の遷移のS-1状態までを含める
+        # 例: S=2なら最初の2状態 '0000->0001' を初期状態とする
+        if S == 1:
+             # S=1 の場合、一つ目の状態 '0000' のみ
+             connected_sequence = first_transition_states[0]
+        else:
+             # S > 1 の場合、S個の状態 (S-1パス) を取得
+             connected_sequence = "->".join(first_transition_states[:-1])
 
-        print(f"  --- シーケンス {idx+1} ({len(seq)}パターン) ---")
-        print(f"  **{path_str}**")
-         
-        # S=2 遷移の表示
-        for t_idx, transition in enumerate(seq):
-             print(f"    {t_idx+1:03d}. {transition}")
-             
-    if len(final_sequences) > 3:
-        print(f"\n  ... ({len(final_sequences) - 3}個のシーケンスを省略)")
+        # 2番目以降の遷移から、最後の1状態のみを抽出して連結する
+        # 例: 2番目の遷移 '0001->0011->1011' から '1011' のみを取得
+        for transition_str in final_sequences_list:
+            last_state = transition_str.split('->')[-1]
+            connected_sequence += "->" + last_state
+
+        print("\n## 🔗 連結されたひとつなぎのシーケンス")
+        print(f"（合計 {total_continuous_count * S} 状態、または {total_continuous_count * (S - 1) + 1} 状態）")
+        
+        if len(connected_sequence) > 200:
+            print(f"> {connected_sequence}")
+    # =========================================================================
+
+
+    print(f"\n--- シーケンスの詳細 ({total_continuous_count}ステップ) ---")
+
+    output_limit = 50
+    for t_idx, transition_str in enumerate(final_sequences_list):
+        if t_idx >= output_limit:
+            print(f"\n  ... ({total_continuous_count - output_limit}個のステップを省略)")
+            break
+            
+        # transition_str は文字列として扱われることを確認
+        transition_states = transition_str.split('->')
+        bit_change_key = get_bit_change_sequence(transition_states)
+        
+        state_a_for_bit_change = transition_states[-2] if S > 1 else transition_states[0]
+        state_b_for_bit_change = transition_states[-1]
+        
+        bit_change_detail = format_transition_bit_change(state_a_for_bit_change, state_b_for_bit_change)
+        
+        print(f"  {t_idx+1:03d}. {transition_str} (パターンID: {bit_change_key}) (最終変化: {bit_change_detail})")
 
     print(f"\n--- 最終結果 ---")
-    print(f"連続遷移として組み込まれたパターン総数: **{overall_continuous_count}**")
-    print(f"残りの非連続なパターン数: **{remaining_count}**")
-     
-    if remaining_count == 0:
-        print("\n✅ **残りの非連続パターン数は 0 です。** (全てのSステップ遷移が回収されました)")
-         
-    return total_count, overall_continuous_count, remaining_count, len(final_sequences)
+    print(f"採用されたユニークなビット変化パターン総数: **{total_edges_adopted}**")
+    print(f"オイラー閉路長: **{len(euler_circuit) if euler_circuit else 0}**")
+        
+    return total_count_full, total_edges_adopted, total_edges_adopted - (len(euler_circuit) if euler_circuit else 0), 1
 
 # --------------------------------------------------------------------------
-# 使用例: N=4ビット, S=2ステップ (デ・ブラン的なケース)
+# 使用例: N=4ビット, S=2ステップ
 # --------------------------------------------------------------------------
 N_BITS_EXAMPLE_1 = 4
 STEP_S_EXAMPLE_1 = 2 
-START_STATE = '0000' # ここを開始したい状態に変更
+START_STATE = '0000' 
 print("==============================================")
-print(f"実行: N={N_BITS_EXAMPLE_1}, S={STEP_S_EXAMPLE_1}, 開始状態={START_STATE}")
-total_1, continuous_1, remaining_1, seq_count_1 = find_single_euler_circuit_variable_s(N_BITS_EXAMPLE_1, STEP_S_EXAMPLE_1, START_STATE)
+print(f"実行: N={N_BITS_EXAMPLE_1}, S={STEP_S_EXAMPLE_1}, オイラー閉路構成で重複排除")
+total_1, unique_1, remaining_1, seq_count_1 = find_single_euler_circuit_variable_s(N_BITS_EXAMPLE_1, STEP_S_EXAMPLE_1, START_STATE)
